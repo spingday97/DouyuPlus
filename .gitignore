@@ -1,0 +1,50 @@
+# Gradle & Build caches
+.gradle/
+build/
+**/build/
+local.properties
+
+# Android & IDE
+.idea/
+*.iml
+.navigation/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Python caches & virtual environments
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Large APKs & Dex dumps (reproducible from base apk)
+*.apk
+apks/
+dex_8.2.1.0/
+src_*/
+
+# Binary SO & libraries (proprietary vendor blobs)
+*.so
+extracted_so/
+
+# Signing keys & keystores
+*.keystore
+*.jks
+
+# Environment & local credentials
+.env
+
+# OS & Logs
+.DS_Store
+*.log
+
+# Temp analysis files & local private scripts
+scripts/
+dex_tool.py
+temp_dex/
+temp_jadx/
+current_shader.glsl
+ui_tmp.xml
+*.png
+*.bak

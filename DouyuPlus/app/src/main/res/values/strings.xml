@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">斗鱼Plus</string>
+    <string name="xposed_description">斗鱼Plus (DouyuPlus)：平板大屏横屏重构、秒开去广告、自适应画质增强、无CD+1弹幕</string>
+</resources>

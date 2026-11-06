@@ -1,0 +1,82 @@
+name: Build DouyuPlus Module
+
+on:
+  push:
+    branches: [ "main" ]
+    tags: [ "[0-9]*-*", "v*" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x DouyuPlus/gradlew
+
+      - name: Build with Gradle
+        run: |
+          cd DouyuPlus
+          ./gradlew assembleRelease
+
+      - name: Sign & Prepare APK
+        env:
+          SIGNING_KEY_BASE64: ${{ secrets.SIGNING_KEY_BASE64 }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_STORE_PASSWORD: ${{ secrets.KEY_STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          PKG_NAME="DouyuPlus-${{ github.ref_name }}.apk"
+          RAW_APK="DouyuPlus/app/build/outputs/apk/release/app-release-unsigned.apk"
+          if [ ! -f "${RAW_APK}" ]; then
+            RAW_APK="DouyuPlus/app/build/outputs/apk/release/app-release.apk"
+          fi
+          LATEST_BT=$(ls -d "$ANDROID_HOME/build-tools/"* | sort -V | tail -n 1)
+          "${LATEST_BT}/zipalign" -f -p 4 "${RAW_APK}" /tmp/aligned.apk
+          if [ -n "${SIGNING_KEY_BASE64}" ]; then
+            echo "${SIGNING_KEY_BASE64}" | base64 -d > /tmp/release.jks
+            "${LATEST_BT}/apksigner" sign \
+              --ks /tmp/release.jks \
+              --ks-key-alias "${KEY_ALIAS}" \
+              --ks-pass "pass:${KEY_STORE_PASSWORD}" \
+              --key-pass "pass:${KEY_PASSWORD}" \
+              --out "DouyuPlus/app/build/outputs/apk/release/${PKG_NAME}" \
+              /tmp/aligned.apk
+            rm -f /tmp/release.jks
+          else
+            mkdir -p ~/.android
+            if [ ! -f ~/.android/debug.keystore ]; then
+              keytool -genkey -v -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+            fi
+            "${LATEST_BT}/apksigner" sign --ks ~/.android/debug.keystore --ks-pass pass:android --out "DouyuPlus/app/build/outputs/apk/release/${PKG_NAME}" /tmp/aligned.apk
+          fi
+          rm -f /tmp/aligned.apk
+          echo "APK_PATH=DouyuPlus/app/build/outputs/apk/release/${PKG_NAME}" >> $GITHUB_ENV
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DouyuPlus-Module
+          path: ${{ env.APK_PATH }}
+
+      - name: Release to GitHub Releases
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.APK_PATH }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
