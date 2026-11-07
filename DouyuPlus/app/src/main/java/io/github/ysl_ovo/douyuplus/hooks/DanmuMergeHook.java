@@ -35,12 +35,121 @@ public class DanmuMergeHook {
 
     // 合并时间窗口 (毫秒)：6 秒内相同内容的弹幕视为重复连击
     private static final long MERGE_WINDOW_MS = 6000L;
+    // 最大允许单条弹幕滑行时长 (毫秒)，防止滑动窗口无限制膨胀
+    private static final long MAX_ALLOWED_DURATION = 15000L;
 
     // 附加到 BaseDanmaku 实例上的关联字段名
     private static final String KEY_MERGE_ENTRY = "douyuplus_merge_entry";
 
     // 缓存活跃的弹幕条目：Key = roomId_type_cleanText -> MergeEntry
     private static final Map<String, MergeEntry> sActiveDanmakuMap = new ConcurrentHashMap<>();
+
+    // 捕获最近活跃的 DanmakuFactory 弱引用
+    private static volatile WeakReference<Object> sDanmakuFactoryRef = null;
+    // 记录合并弹幕所需的最大滑行时长，防止 DanmakuFactory.updateMaxDanmakuDuration() 重置覆盖
+    private static volatile long sCustomMaxDanmakuDuration = 0L;
+
+    private static void captureDanmakuContext(Object drawHandler) {
+        if (drawHandler == null) return;
+        try {
+            Object ctx = XposedHelpers.getObjectField(drawHandler, "mContext");
+            if (ctx != null) {
+                Object factory = XposedHelpers.getObjectField(ctx, "mDanmakuFactory");
+                if (factory != null) {
+                    Object current = (sDanmakuFactoryRef != null) ? sDanmakuFactoryRef.get() : null;
+                    if (current != factory) {
+                        sDanmakuFactoryRef = new WeakReference<>(factory);
+                    }
+                }
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    private static void applyCustomMaxDurationToFactory(Object factory, long targetMax) {
+        if (factory == null || targetMax <= 0L) return;
+        try {
+            long curMax = 0L;
+            String targetField = null;
+            try {
+                curMax = XposedHelpers.getLongField(factory, "mMaxDanmakuDuration");
+                targetField = "mMaxDanmakuDuration";
+            } catch (Throwable t) {
+                try {
+                    curMax = XposedHelpers.getLongField(factory, "MAX_DANMAKU_DURATION");
+                    targetField = "MAX_DANMAKU_DURATION";
+                } catch (Throwable ignored) {}
+            }
+            if (targetField != null && targetMax > curMax) {
+                XposedHelpers.setLongField(factory, targetField, targetMax);
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    private static void updateMaxDanmakuDuration(long newDur) {
+        long targetMax = Math.min(MAX_ALLOWED_DURATION, newDur + 1000L); // 留足 1 秒缓冲，杜绝 DrawTask 滑动窗口提前截断
+        if (targetMax > sCustomMaxDanmakuDuration) {
+            sCustomMaxDanmakuDuration = targetMax;
+        }
+        Object factory = (sDanmakuFactoryRef != null) ? sDanmakuFactoryRef.get() : null;
+        if (factory != null) {
+            applyCustomMaxDurationToFactory(factory, sCustomMaxDanmakuDuration);
+        }
+    }
+
+    /**
+     * 为合并弹幕绑定或更新专属独立的 Duration 实例，严禁污染全局共享的 mMaxDurationScrollDanmaku
+     */
+    private static void applyIndependentDuration(Object danmaku, MergeEntry entry, Object durationObj, long newDur) {
+        if (danmaku == null || entry == null || durationObj == null || newDur <= 0L) {
+            return;
+        }
+        newDur = Math.min(MAX_ALLOWED_DURATION, newDur);
+        if (entry.independentDuration == null) {
+            try {
+                float factor = 1.0f;
+                try {
+                    factor = XposedHelpers.getFloatField(durationObj, "factor");
+                    if (factor <= 0.0f) factor = 1.0f;
+                } catch (Throwable ignored) {}
+
+                // 斗鱼 Duration 内部实现为 value = (long) (mInitialDuration / factor)
+                // 期望实际滑行时长 value 为 newDur，因此 mInitialDuration 必须为 (newDur * factor)
+                long initialDur = (long) (newDur * factor);
+                Object indepDur = null;
+                try {
+                    indepDur = XposedHelpers.newInstance(durationObj.getClass(), initialDur);
+                } catch (Throwable t) {
+                    try {
+                        indepDur = XposedHelpers.newInstance(durationObj.getClass());
+                        XposedHelpers.setLongField(indepDur, "mInitialDuration", initialDur);
+                    } catch (Throwable ignored) {}
+                }
+
+                if (indepDur != null) {
+                    XposedHelpers.setFloatField(indepDur, "factor", factor);
+                    XposedHelpers.setLongField(indepDur, "value", newDur);
+
+                    entry.independentDuration = indepDur;
+                    try {
+                        XposedHelpers.callMethod(danmaku, "setDuration", indepDur);
+                    } catch (Throwable ignored) {}
+                    XposedHelpers.setObjectField(danmaku, "duration", indepDur);
+                }
+            } catch (Throwable t) {
+                Log.w(TAG, "Failed to create independent Duration", t);
+            }
+        } else {
+            try {
+                float factor = XposedHelpers.getFloatField(entry.independentDuration, "factor");
+                if (factor <= 0.0f) factor = 1.0f;
+                XposedHelpers.setLongField(entry.independentDuration, "mInitialDuration", (long) (newDur * factor));
+            } catch (Throwable ignored) {}
+            try {
+                XposedHelpers.setLongField(entry.independentDuration, "value", newDur);
+            } catch (Throwable ignored) {}
+        }
+        updateMaxDanmakuDuration(newDur);
+    }
 
     /**
      * 静态比例缩放与基线偏移 Span（每次更新创建不可变的新实例，保证渲染线程安全）
@@ -83,6 +192,7 @@ public class DanmuMergeHook {
         volatile long lastUpdateTime;
         volatile float basePaintHeight = 0.0f;
         volatile float origStepX = 0.0f;
+        volatile Object independentDuration = null;
 
         MergeEntry(Object danmaku, CharSequence originalText, String cleanKey, String roomId, int danmakuType) {
             this.danmakuRef = new WeakReference<>(danmaku);
@@ -152,6 +262,7 @@ public class DanmuMergeHook {
                             if (!DouyuPlusConfig.isDanmuMergeEnabled()) {
                                 return;
                             }
+                            captureDanmakuContext(param.thisObject);
                             if (processDanmakuMerge(param.args[0])) {
                                 param.setResult(null);
                             }
@@ -163,6 +274,93 @@ public class DanmuMergeHook {
             }
         } catch (Throwable t) {
             Log.w(TAG, "Failed to hook DrawHandler.addDanmaku", t);
+        }
+
+        // 2.5 Hook DanmakuFactory - 防止 updateMaxDanmakuDuration 重置覆盖合并弹幕所需的滑动窗口时长
+        try {
+            Class<?> factoryCls = XposedHelpers.findClass(
+                    "master.flame.danmaku.danmaku.parser.DanmakuFactory",
+                    lpparam.classLoader
+            );
+            XposedHelpers.findAndHookMethod(
+                    factoryCls,
+                    "updateMaxDanmakuDuration",
+                    new XC_MethodHook() {
+                        @Override
+                        protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                            Object factory = param.thisObject;
+                            if (factory != null) {
+                                Object current = (sDanmakuFactoryRef != null) ? sDanmakuFactoryRef.get() : null;
+                                if (current != factory) {
+                                    sDanmakuFactoryRef = new WeakReference<>(factory);
+                                }
+                                if (sCustomMaxDanmakuDuration > 0L) {
+                                    applyCustomMaxDurationToFactory(factory, sCustomMaxDanmakuDuration);
+                                }
+                            }
+                        }
+                    }
+            );
+            XposedHelpers.findAndHookMethod(
+                    factoryCls,
+                    "resetDurationsData",
+                    new XC_MethodHook() {
+                        @Override
+                        protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                            sCustomMaxDanmakuDuration = 0L;
+                        }
+                    }
+            );
+
+            // 2.6 Hook DanmakuFactory.createDanmaku -> 彻底解决原版斗鱼调高弹幕速度时左侧慢弹幕瞬间消失的缺陷
+            // 原版斗鱼所有滚动弹幕均复用同一个全局 mMaxDurationScrollDanmaku 实例指针。
+            // 当用户调高弹幕速度时，该共享实例的 value 被改小，导致屏幕上正在滑行的慢弹幕下一帧直接判定 isTimeOut() 提前被销毁。
+            // 在此处为每条新创建的弹幕深拷贝独立的 Duration 实例，使其拥有独立生命周期，调速时老弹幕依然平滑滑出屏幕！
+            for (Method m : factoryCls.getDeclaredMethods()) {
+                if ("createDanmaku".equals(m.getName()) && baseDanmakuCls.isAssignableFrom(m.getReturnType())) {
+                    XposedBridge.hookMethod(m, new XC_MethodHook() {
+                        @Override
+                        protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                            Object danmaku = param.getResult();
+                            if (danmaku == null) return;
+                            try {
+                                Object durObj = XposedHelpers.getObjectField(danmaku, "duration");
+                                if (durObj != null) {
+                                    long initialDur = XposedHelpers.getLongField(durObj, "mInitialDuration");
+                                    float factor = XposedHelpers.getFloatField(durObj, "factor");
+                                    long val = XposedHelpers.getLongField(durObj, "value");
+                                    Object indepDur = XposedHelpers.newInstance(durObj.getClass(), initialDur);
+                                    XposedHelpers.setFloatField(indepDur, "factor", factor);
+                                    XposedHelpers.setLongField(indepDur, "value", val);
+                                    XposedHelpers.setObjectField(danmaku, "duration", indepDur);
+                                }
+                            } catch (Throwable ignored) {}
+                        }
+                    });
+                }
+            }
+            Log.i(TAG, "✓ Hooked DanmakuFactory duration lifecycle & independent createDanmaku");
+        } catch (Throwable t) {
+            Log.w(TAG, "Failed to hook DanmakuFactory", t);
+        }
+
+        // 2.7 Hook BaseDanmaku.isLate() -> 彻底根除 DanmakuRenderer.draw 中因为单条未来弹幕/时间戳抖动弹幕触发 break 截断整帧、导致整块在屏弹幕瞬间蒸发的缺陷！
+        // 各弹幕自身的 layout() 方法内部均有严格的 (currMillisecond - time <= 0 -> setVisibility(false)) 保护，
+        // 未到时间的弹幕绝不会被画出，而排在后面的在屏老弹幕再也不会被连坐截断！
+        try {
+            XposedHelpers.findAndHookMethod(
+                    baseDanmakuCls,
+                    "isLate",
+                    new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                            param.setResult(false);
+                        }
+                    }
+            );
+            Log.i(TAG, "✓ Hooked BaseDanmaku.isLate -> fixed premature block disappearance");
+        } catch (Throwable t) {
+            Log.w(TAG, "Failed to hook BaseDanmaku.isLate", t);
         }
 
         // 3. Hook BaseDanmaku.measure(IDisplayer) - 在渲染线程内安全执行连击文本替换、排版测量与缓存刷新
@@ -202,6 +400,34 @@ public class DanmuMergeHook {
 
                             int targetCount = entry.count;
                             if (targetCount >= 2 && entry.appliedCount != targetCount) {
+                                // 若在首次 measure 前就已发生连击合并，先测量一次原始未放大文本以准确提取 basePaintHeight 与原始速度 origStepX
+                                if (entry.basePaintHeight <= 0.0f || entry.origStepX <= 0.0f) {
+                                    try {
+                                        XposedHelpers.setObjectField(danmaku, "text", entry.originalText);
+                                        XposedHelpers.callMethod(displayer, "measure", danmaku);
+                                        float origW = XposedHelpers.getFloatField(danmaku, "paintWidth");
+                                        float origH = XposedHelpers.getFloatField(danmaku, "paintHeight");
+                                        if (entry.basePaintHeight <= 0.0f && origH > 0.0f) {
+                                            entry.basePaintHeight = origH;
+                                        }
+                                        if (entry.origStepX <= 0.0f && origW > 0.0f) {
+                                            int dispW = (int) XposedHelpers.callMethod(displayer, "getWidth");
+                                            Object durObj = XposedHelpers.getObjectField(danmaku, "duration");
+                                            int hoverTime = 0;
+                                            try {
+                                                hoverTime = XposedHelpers.getIntField(danmaku, "mHoverTime");
+                                            } catch (Throwable ignored) {}
+                                            if (dispW > 0 && durObj != null) {
+                                                long durVal = XposedHelpers.getLongField(durObj, "value");
+                                                long effDur = durVal - hoverTime;
+                                                if (effDur > 0L) {
+                                                    entry.origStepX = (dispW + origW) / (float) effDur;
+                                                }
+                                            }
+                                        }
+                                    } catch (Throwable ignored) {}
+                                }
+
                                 float mainScale = Math.min(1.80f, 1.0f + 0.10f * (targetCount - 1));
                                 float subScale = Math.min(1.40f, 0.75f + 0.08f * (targetCount - 2));
                                 float shiftRatio = Math.max(0.06f, 0.20f - 0.02f * (targetCount - 2));
@@ -314,20 +540,34 @@ public class DanmuMergeHook {
                                 return;
                             }
                             float curStepX = XposedHelpers.getFloatField(danmaku, "mStepX");
-                            if (entry.origStepX <= 0.0f) {
-                                if (curStepX > 0.0f) {
+                            if (curStepX > 0.0f) {
+                                if (entry.origStepX <= 0.0f || entry.appliedCount == 1) {
                                     entry.origStepX = curStepX;
                                 }
-                            } else if (entry.count >= 2) {
-                                XposedHelpers.setFloatField(danmaku, "mStepX", entry.origStepX);
-                                int distance = XposedHelpers.getIntField(danmaku, "mDistance");
-                                int hoverTime = XposedHelpers.getIntField(danmaku, "mHoverTime");
+                            }
+
+                            if (entry.count >= 2) {
+                                if (entry.origStepX > 0.0f) {
+                                    XposedHelpers.setFloatField(danmaku, "mStepX", entry.origStepX);
+                                }
+                                int distance = 0;
+                                try {
+                                    distance = XposedHelpers.getIntField(danmaku, "mDistance");
+                                } catch (Throwable ignored) {}
+
+                                int hoverTime = 0;
+                                try {
+                                    hoverTime = XposedHelpers.getIntField(danmaku, "mHoverTime");
+                                } catch (Throwable ignored) {}
+
                                 Object durationObj = XposedHelpers.getObjectField(danmaku, "duration");
-                                if (durationObj != null && distance > 0) {
-                                    long newDur = (long) (distance / entry.origStepX) + hoverTime;
+                                float effectiveStepX = entry.origStepX > 0.0f ? entry.origStepX : curStepX;
+                                if (durationObj != null && distance > 0 && effectiveStepX > 0.0f) {
+                                    // 向上取整并增加 150ms 缓冲，彻底杜绝浮点截断导致在出屏边缘提前判定超时隐藏
+                                    long newDur = (long) Math.ceil(distance / (double) effectiveStepX) + hoverTime + 150L;
                                     long curDur = XposedHelpers.getLongField(durationObj, "value");
-                                    if (newDur > curDur) {
-                                        XposedHelpers.setLongField(durationObj, "value", newDur);
+                                    if (newDur > curDur || entry.independentDuration == null) {
+                                        applyIndependentDuration(danmaku, entry, durationObj, Math.max(newDur, curDur));
                                     }
                                 }
                             }
@@ -401,7 +641,27 @@ public class DanmuMergeHook {
                     if (canMerge) {
                         existing.count++;
                         existing.lastUpdateTime = now;
-                        // 仅标记 measureResetFlag = -1，交由渲染线程在下一帧自动调用 measure() 完成文本更新与缓存刷新
+                        // 预先为即将合并重测的弹幕挂载独立 Duration 并预留安全缓冲期，
+                        // 防止下一帧 DanmakuRenderer.draw 在调用 measure() 之前于第 61 行判定 isTimeOut() 提前回收弹幕
+                        try {
+                            Object durObj = XposedHelpers.getObjectField(prevDanmaku, "duration");
+                            if (durObj != null) {
+                                long curDur = XposedHelpers.getLongField(durObj, "value");
+                                long targetDur = curDur;
+                                Object timer = XposedHelpers.getObjectField(prevDanmaku, "mTimer");
+                                if (timer != null) {
+                                    long currTimer = XposedHelpers.getLongField(timer, "currMillisecond");
+                                    long realTime = (long) XposedHelpers.callMethod(prevDanmaku, "getActualTime");
+                                    long elapsed = currTimer - realTime;
+                                    if (elapsed > 0L && curDur - elapsed < 1500L) {
+                                        targetDur = elapsed + 1500L;
+                                    }
+                                }
+                                applyIndependentDuration(prevDanmaku, existing, durObj, targetDur);
+                            }
+                        } catch (Throwable ignored) {}
+
+                        // 标记 measureResetFlag = -1，交由渲染线程在下一帧自动调用 measure() 完成文本更新、精准时长计算与缓存刷新
                         try {
                             XposedHelpers.setIntField(prevDanmaku, "measureResetFlag", -1);
                         } catch (Throwable ignored) {}
@@ -423,7 +683,7 @@ public class DanmuMergeHook {
     }
 
     /**
-     * 在渲染线程内安全刷新弹幕绘制缓存，保持 CacheManager.mRealSize 记账平衡并防止 OpenGL 纹理泄漏
+     * 在渲染线程内安全刷新弹幕绘制缓存，保持 CacheManager.mRealSize 记账平衡并防止 OpenGL 纹理泄漏与跨线程异常
      */
     private static void refreshDanmakuCacheOnRenderThread(Object danmaku, Object displayer) {
         try {
@@ -439,42 +699,20 @@ public class DanmuMergeHook {
 
             if (cacheClsName.endsWith("GLDrawingCache")) {
                 // OpenGL 渲染模式 (GLDisplayer)
+                // GLDisplayer.draw 在绘制时，会原生检测 !hasDrawingCache()，并在当前 GL 线程安全地调用 buildDanmakuDrawingCache
+                // 重构包含连击 (xN) 的全新纹理并绑定。严禁在此处跨线程调用 GLES20.glDeleteTextures 破坏 GL 状态机！
                 if (hasRefs) {
-                    XposedHelpers.callMethod(cache, "decreaseReference");
-                    XposedHelpers.setObjectField(danmaku, "cache", null);
-                } else {
-                    Object holder = XposedHelpers.callMethod(cache, "get");
-                    if (holder != null) {
-                        try {
-                            XposedHelpers.callMethod(holder, "deleteTextureId");
-                        } catch (Throwable ignored) {}
-                    }
-                    int origSize = 0;
                     try {
-                        origSize = XposedHelpers.getIntField(cache, "mSize");
+                        XposedHelpers.callMethod(cache, "decreaseReference");
                     } catch (Throwable ignored) {}
-                    Class<?> utilsCls = XposedHelpers.findClass(
-                            "master.flame.danmaku.danmaku.util.DanmakuUtils",
-                            danmaku.getClass().getClassLoader()
-                    );
-                    Object newCache = XposedHelpers.callStaticMethod(
-                            utilsCls,
-                            "buildDanmakuDrawingCache",
-                            danmaku,
-                            displayer,
-                            cache
-                    );
-                    XposedHelpers.setObjectField(danmaku, "cache", newCache);
-                    if (origSize > 0 && newCache != null) {
-                        try {
-                            XposedHelpers.setIntField(newCache, "mSize", origSize);
-                        } catch (Throwable ignored) {}
-                    }
                 }
+                XposedHelpers.setObjectField(danmaku, "cache", null);
             } else {
                 // Canvas 渲染模式 (AndroidDisplayer + CacheManagingDrawTask)
                 if (hasRefs) {
-                    XposedHelpers.callMethod(cache, "decreaseReference");
+                    try {
+                        XposedHelpers.callMethod(cache, "decreaseReference");
+                    } catch (Throwable ignored) {}
                     XposedHelpers.setObjectField(danmaku, "cache", null);
                 } else {
                     Object holder = XposedHelpers.getObjectField(cache, "mHolder");
