@@ -180,6 +180,39 @@ public class DanmuMergeHook {
         }
     }
 
+    /**
+     * 连击合并弹幕专用 SpannableStringBuilder (方案一：Model/View 解耦代理)
+     * 继承自 SpannableStringBuilder 保持 Android 文本排版和渲染引擎对 Span 及样式序列的完整支持；
+     * 同时重写 toString() 返回原始未经追加的 originalText。
+     *
+     * 架构收益：
+     * 1. 视图层 (View)：StaticLayout / Canvas 遍历 CharSequence 绘制出放大的文字与 xN 连击计数。
+     * 2. 数据层 (Model)：斗鱼客户端在长按/点击弹幕执行 +1、回复、收藏、举报等业务时，
+     *    通过 String.valueOf(danmaku.text) 或 danmaku.text.toString() 获取到的永远是
+     *    纯净无污染的原始弹幕文本，彻底杜绝 xN 污染、套娃连击以及字数超限截断等问题！
+     */
+    public static class ComboSpannableStringBuilder extends SpannableStringBuilder {
+        private final String mOriginalText;
+
+        public ComboSpannableStringBuilder(CharSequence originalText) {
+            super(originalText);
+            if (originalText instanceof ComboSpannableStringBuilder) {
+                this.mOriginalText = ((ComboSpannableStringBuilder) originalText).mOriginalText;
+            } else {
+                this.mOriginalText = originalText != null ? originalText.toString() : "";
+            }
+        }
+
+        @Override
+        public String toString() {
+            return mOriginalText;
+        }
+
+        public String getOriginalText() {
+            return mOriginalText;
+        }
+    }
+
     private static class MergeEntry {
         final WeakReference<Object> danmakuRef;
         final CharSequence originalText;
@@ -196,7 +229,11 @@ public class DanmuMergeHook {
 
         MergeEntry(Object danmaku, CharSequence originalText, String cleanKey, String roomId, int danmakuType) {
             this.danmakuRef = new WeakReference<>(danmaku);
-            this.originalText = originalText;
+            if (originalText instanceof ComboSpannableStringBuilder) {
+                this.originalText = ((ComboSpannableStringBuilder) originalText).getOriginalText();
+            } else {
+                this.originalText = originalText;
+            }
             this.cleanKey = cleanKey;
             this.roomId = roomId;
             this.danmakuType = danmakuType;
@@ -450,7 +487,7 @@ public class DanmuMergeHook {
                                 } catch (Throwable ignored) {}
 
                                 CharSequence orig = entry.originalText;
-                                SpannableStringBuilder ssb = new SpannableStringBuilder(orig);
+                                ComboSpannableStringBuilder ssb = new ComboSpannableStringBuilder(orig);
                                 ssb.setSpan(new DanmuScaleSpan(mainScale, 0.0f), 0, orig.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
 
                                 ssb.append("\u00A0x").append(String.valueOf(targetCount));
@@ -581,6 +618,40 @@ public class DanmuMergeHook {
     }
 
     /**
+     * 高性能清理弹幕中的不可见字符（如零宽空格等）并去除两端空白
+     * 采用无正则单遍扫描 Fast-Path：
+     * 99% 的普通弹幕无需分配中间对象直接返回，仅在检测到零宽字符时才开辟 StringBuilder 过滤，
+     * 彻底杜绝 Pattern.compile / replaceAll 在高频弹幕下的 CPU 与 GC 压力。
+     */
+    private static String cleanDanmuText(CharSequence text) {
+        if (text == null) return "";
+        int len = text.length();
+        if (len == 0) return "";
+
+        boolean hasZeroWidth = false;
+        for (int i = 0; i < len; i++) {
+            char c = text.charAt(i);
+            if ((c >= '\u200B' && c <= '\u200D') || c == '\uFEFF') {
+                hasZeroWidth = true;
+                break;
+            }
+        }
+
+        if (!hasZeroWidth) {
+            return text.toString().trim();
+        }
+
+        StringBuilder sb = new StringBuilder(len);
+        for (int i = 0; i < len; i++) {
+            char c = text.charAt(i);
+            if (!((c >= '\u200B' && c <= '\u200D') || c == '\uFEFF')) {
+                sb.append(c);
+            }
+        }
+        return sb.toString().trim();
+    }
+
+    /**
      * 处理弹幕合并逻辑，返回 true 表示命中重复并已合并拦截，返回 false 表示首条弹幕正常放行
      */
     private static boolean processDanmakuMerge(Object baseDanmaku) {
@@ -594,7 +665,7 @@ public class DanmuMergeHook {
                 return false;
             }
 
-            String rawStr = textObj.toString().trim();
+            String rawStr = cleanDanmuText(textObj);
             if (rawStr.isEmpty()) {
                 return false;
             }

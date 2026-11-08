@@ -33,6 +33,45 @@ jobs:
           cd DouyuPlus
           ./gradlew assembleRelease
 
+      - name: Verify APK Version Consistency (CI Intercept)
+        run: |
+          RAW_APK="DouyuPlus/app/build/outputs/apk/release/app-release-unsigned.apk"
+          if [ ! -f "${RAW_APK}" ]; then
+            RAW_APK="DouyuPlus/app/build/outputs/apk/release/app-release.apk"
+          fi
+          if [ ! -f "${RAW_APK}" ]; then
+            echo "::error::未找到构建生成的 APK 文件: ${RAW_APK}"
+            exit 1
+          fi
+
+          LATEST_BT=$(ls -d "$ANDROID_HOME/build-tools/"* | sort -V | tail -n 1)
+          BADGING=$("${LATEST_BT}/aapt" dump badging "${RAW_APK}")
+          APK_VC=$(echo "${BADGING}" | grep -oP "versionCode='\K[^']+")
+          APK_VN=$(echo "${BADGING}" | grep -oP "versionName='\K[^']+")
+          EXPECTED_TAG="${APK_VC}-${APK_VN}"
+
+          echo "=========================================="
+          echo "APK 解析结果:"
+          echo "  versionCode : ${APK_VC}"
+          echo "  versionName : ${APK_VN}"
+          echo "  预期 Tag 格式: ${EXPECTED_TAG}"
+          echo "=========================================="
+
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            CURRENT_TAG="${{ github.ref_name }}"
+            echo "当前推送 Tag  : ${CURRENT_TAG}"
+            if [ "${CURRENT_TAG}" != "${EXPECTED_TAG}" ]; then
+              echo "::error::[CI 拦截] Release Tag 与 APK 内部版本号不一致！"
+              echo "::error::当前触发的 Tag 为: [${CURRENT_TAG}]"
+              echo "::error::APK 内部编译版本为: [${EXPECTED_TAG}] (versionCode=${APK_VC}, versionName=${APK_VN})"
+              echo "::error::请修改 DouyuPlus/app/build.gradle 中的版本号以匹配 Tag 后再重新发布。"
+              exit 1
+            fi
+            echo "✅ [CI 校验通过] Git Tag 与 APK 内部版本完全匹配 (${CURRENT_TAG})"
+          else
+            echo "ℹ️ 当前为非 Tag 构建 (ref: ${{ github.ref_name }})，无需校验 Tag 强一致性。"
+          fi
+
       - name: Sign & Prepare APK
         env:
           SIGNING_KEY_BASE64: ${{ secrets.SIGNING_KEY_BASE64 }}
@@ -73,10 +112,41 @@ jobs:
           name: DouyuPlus-Module
           path: ${{ env.APK_PATH }}
 
-      - name: Release to GitHub Releases
+      - name: Release to Personal GitHub Releases
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ env.APK_PATH }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Sync Release to Xposed-Modules-Repo
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.MODULE_REPO_TOKEN }}
+          TARGET_REPO: "Xposed-Modules-Repo/io.github.ysl_ovo.douyuplus"
+        run: |
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "::warning::未检测到 secrets.MODULE_REPO_TOKEN，已跳过自动同步到 Xposed-Modules-Repo。"
+            echo "::notice::若需自动同步发行版，请在仓库 Settings -> Secrets 中添加具备 repo 权限的 MODULE_REPO_TOKEN。"
+            exit 0
+          fi
+
+          TAG_NAME="${{ github.ref_name }}"
+          echo "============================================================"
+          echo ">>> 正在同步发布到官方模块仓库: ${TARGET_REPO}"
+          echo ">>> 目标 Tag: ${TAG_NAME}"
+          echo "============================================================"
+
+          if gh release view "${TAG_NAME}" --repo "${TARGET_REPO}" >/dev/null 2>&1; then
+            echo "ℹ️ 目标仓库已存在 Release [${TAG_NAME}]，正在上传并覆盖 APK 附件..."
+            gh release upload "${TAG_NAME}" "${{ env.APK_PATH }}" --repo "${TARGET_REPO}" --clobber
+          else
+            echo "🚀 正在目标仓库创建 Release 并上传 APK..."
+            gh release create "${TAG_NAME}" "${{ env.APK_PATH }}" \
+              --repo "${TARGET_REPO}" \
+              --title "${TAG_NAME}" \
+              --generate-notes
+          fi
+
+          echo "✅ 成功将 Release ${TAG_NAME} 与 APK 同步发布到 Xposed-Modules-Repo！"
