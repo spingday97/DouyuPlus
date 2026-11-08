@@ -25,7 +25,9 @@ jobs:
           distribution: 'temurin'
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.6'
 
       - name: Grant execute permission for gradlew
         run: chmod +x DouyuPlus/gradlew
@@ -33,7 +35,11 @@ jobs:
       - name: Build with Gradle
         run: |
           cd DouyuPlus
-          ./gradlew assembleRelease
+          if command -v gradle &> /dev/null; then
+            gradle assembleRelease
+          else
+            ./gradlew assembleRelease
+          fi
 
       - name: Verify APK Version Consistency (CI Intercept)
         run: |
