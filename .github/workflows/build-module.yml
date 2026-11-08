@@ -17,6 +17,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -72,8 +74,28 @@ jobs:
               exit 1
             fi
             echo "✅ [CI 校验通过] Git Tag 与 APK 内部版本完全匹配 (${CURRENT_TAG})"
+
+            # 校验 Tag 是否为附注标签且附带更新说明
+            TAG_TYPE=$(git cat-file -t "${CURRENT_TAG}" 2>/dev/null || echo "")
+            RAW_MSG=$(git tag -l --format='%(contents)' "${CURRENT_TAG}")
+            TRIMMED_MSG=$(echo "${RAW_MSG}" | tr -d '[:space:]')
+
+            if [ "${TAG_TYPE}" != "tag" ] || [ -z "${TRIMMED_MSG}" ]; then
+              echo "::error::[CI 拦截] Tag [${CURRENT_TAG}] 未包含发布说明或为未附注的轻量标签！"
+              echo "::error::为保证发行版更新日志完整，请使用附注标签打标，例如:"
+              echo "::error::git tag -a ${CURRENT_TAG} -m \"更新说明...\""
+              exit 1
+            fi
+
+            echo "✅ [CI 校验通过] Git Tag 包含有效的附注更新说明"
+            EOF_MARKER="EOF_TAG_MSG_$(date +%s)"
+            {
+              echo "RELEASE_BODY<<${EOF_MARKER}"
+              echo "${RAW_MSG}"
+              echo "${EOF_MARKER}"
+            } >> "$GITHUB_ENV"
           else
-            echo "ℹ️ 当前为非 Tag 构建 (ref: ${{ github.ref_name }})，无需校验 Tag 强一致性。"
+            echo "ℹ️ 当前为非 Tag 构建 (ref: ${{ github.ref_name }})，无需校验 Tag 强一致性与说明。"
           fi
 
       - name: Sign & Prepare APK
@@ -121,6 +143,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ env.APK_PATH }}
+          body: ${{ env.RELEASE_BODY }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -129,10 +152,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.MODULE_REPO_TOKEN }}
           TARGET_REPO: "Xposed-Modules-Repo/io.github.ysl_ovo.douyuplus"
+          RELEASE_BODY: ${{ env.RELEASE_BODY }}
         run: |
           if [ -z "${GH_TOKEN}" ]; then
             echo "::warning::未检测到 secrets.MODULE_REPO_TOKEN，已跳过自动同步到 Xposed-Modules-Repo。"
-            echo "::notice::若需自动同步发行版，请在仓库 Settings -> Secrets 中添加具备 repo 权限的 MODULE_REPO_TOKEN。"
+            echo "::notice::若需自动同步发行版，请在仓库 Settings -> Secrets 中添加具备 repo权限的 MODULE_REPO_TOKEN。"
             exit 0
           fi
 
@@ -143,14 +167,17 @@ jobs:
           echo "============================================================"
 
           if gh release view "${TAG_NAME}" --repo "${TARGET_REPO}" >/dev/null 2>&1; then
-            echo "ℹ️ 目标仓库已存在 Release [${TAG_NAME}]，正在上传并覆盖 APK 附件..."
+            echo "ℹ️ 目标仓库已存在 Release [${TAG_NAME}]，正在上传并覆盖 APK 附件与更新日志..."
             gh release upload "${TAG_NAME}" "${{ env.APK_PATH }}" --repo "${TARGET_REPO}" --clobber
+            if [ -n "${RELEASE_BODY}" ]; then
+              gh release edit "${TAG_NAME}" --repo "${TARGET_REPO}" --notes "${RELEASE_BODY}"
+            fi
           else
             echo "🚀 正在目标仓库创建 Release 并上传 APK..."
             gh release create "${TAG_NAME}" "${{ env.APK_PATH }}" \
               --repo "${TARGET_REPO}" \
               --title "${TAG_NAME}" \
-              --generate-notes
+              --notes "${RELEASE_BODY}"
           fi
 
           echo "✅ 成功将 Release ${TAG_NAME} 与 APK 同步发布到 Xposed-Modules-Repo！"
