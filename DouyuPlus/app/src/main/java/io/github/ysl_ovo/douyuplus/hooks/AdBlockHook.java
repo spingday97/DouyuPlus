@@ -215,13 +215,14 @@ public class AdBlockHook {
             view.setLayoutParams(lp);
         }
 
-        // 同时折叠外层父容器 ig_，消除中间留下的黑色空隙
+        // 同时折叠外层父容器 ig_ 以及同级占位视图 kqz，彻底消除中间黑色空隙
         android.view.ViewParent parent = view.getParent();
         if (parent instanceof View) {
             View parentView = (View) parent;
             try {
+                Resources res = parentView.getResources();
                 if (parentView.getId() != View.NO_ID
-                        && "ig_".equals(parentView.getResources().getResourceEntryName(parentView.getId()))) {
+                        && "ig_".equals(res.getResourceEntryName(parentView.getId()))) {
                     parentView.setMinimumHeight(0);
                     if (parentView.getVisibility() != View.GONE) {
                         parentView.setVisibility(View.GONE);
@@ -230,6 +231,27 @@ public class AdBlockHook {
                     if (plp != null && plp.height != 0) {
                         plp.height = 0;
                         parentView.setLayoutParams(plp);
+                    }
+
+                    // 折叠 jhl 下的同级占位 View (kqz)
+                    android.view.ViewParent grandParent = parentView.getParent();
+                    if (grandParent instanceof ViewGroup) {
+                        String pkg = parentView.getContext().getPackageName();
+                        int kqzId = res.getIdentifier("kqz", "id", pkg);
+                        if (kqzId != 0) {
+                            View kqzView = ((ViewGroup) grandParent).findViewById(kqzId);
+                            if (kqzView != null) {
+                                kqzView.setMinimumHeight(0);
+                                if (kqzView.getVisibility() != View.GONE) {
+                                    kqzView.setVisibility(View.GONE);
+                                }
+                                ViewGroup.LayoutParams klp = kqzView.getLayoutParams();
+                                if (klp != null && klp.height != 0) {
+                                    klp.height = 0;
+                                    kqzView.setLayoutParams(klp);
+                                }
+                            }
+                        }
                     }
                 }
             } catch (Throwable ignored) {}
