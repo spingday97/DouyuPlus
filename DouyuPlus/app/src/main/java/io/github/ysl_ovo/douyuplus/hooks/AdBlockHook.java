@@ -214,6 +214,26 @@ public class AdBlockHook {
             lp.height = 0;
             view.setLayoutParams(lp);
         }
+
+        // 同时折叠外层父容器 ig_，消除中间留下的黑色空隙
+        android.view.ViewParent parent = view.getParent();
+        if (parent instanceof View) {
+            View parentView = (View) parent;
+            try {
+                if (parentView.getId() != View.NO_ID
+                        && "ig_".equals(parentView.getResources().getResourceEntryName(parentView.getId()))) {
+                    parentView.setMinimumHeight(0);
+                    if (parentView.getVisibility() != View.GONE) {
+                        parentView.setVisibility(View.GONE);
+                    }
+                    ViewGroup.LayoutParams plp = parentView.getLayoutParams();
+                    if (plp != null && plp.height != 0) {
+                        plp.height = 0;
+                        parentView.setLayoutParams(plp);
+                    }
+                }
+            } catch (Throwable ignored) {}
+        }
     }
 
     private static boolean isPortraitMidAdBanner(View view) {
