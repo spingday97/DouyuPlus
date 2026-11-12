@@ -3,6 +3,7 @@ package io.github.ysl_ovo.douyuplus.hooks;
 import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
+import android.content.res.Resources;
 import android.text.TextUtils;
 import android.util.Log;
 import android.view.View;
@@ -27,6 +28,7 @@ import java.util.Set;
  * 5. 彻底铲除直播间右下角劣质手游大卡片（烈焰觉醒、仙逆H5、中插广告 AdMidRoll）
  * 6. 彻底拔除全屏右下角活动大挂件（三团联动卡片大挂件、BigPendantView、EntriesGroup）
  * 7. 官方业务总开关 LiveRoomBizSwitch 精准管控
+ * 8. 彻底隐藏竖屏直播间播放器下方「广告 / 来唠嗑 / 语音厅唠嗑」横幅 (jj2)
  */
 public class AdBlockHook {
     private static final String TAG = "DouyuPlus_AdBlock";
@@ -149,6 +151,78 @@ public class AdBlockHook {
 
         // 16. 彻底铲除发现页（推荐流）、动态页等信息流广告卡片
         hookFeedAds(lpparam);
+
+        // 17. 彻底隐藏竖屏直播间播放器下方中间广告横幅（广告角标 + 来唠嗑/语音厅唠嗑按钮）
+        hookPortraitMidAdBanner(lpparam);
+    }
+
+    /**
+     * 彻底隐藏竖屏直播间播放器下方「广告 / 来唠嗑 / 语音厅唠嗑」横幅 (air.tv.douyu.android:id/jj2)
+     */
+    private static void hookPortraitMidAdBanner(final XC_LoadPackage.LoadPackageParam lpparam) {
+        try {
+            Class<?> linearCompatCls = XposedHelpers.findClassIfExists(
+                    "androidx.appcompat.widget.LinearLayoutCompat",
+                    lpparam.classLoader
+            );
+            if (linearCompatCls == null) return;
+
+            XposedHelpers.findAndHookMethod(linearCompatCls, "setVisibility", int.class, new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                    View view = (View) param.thisObject;
+                    if (isPortraitMidAdBanner(view)) {
+                        param.args[0] = View.GONE;
+                    }
+                }
+            });
+
+            XposedHelpers.findAndHookMethod(linearCompatCls, "onMeasure", int.class, int.class, new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                    View view = (View) param.thisObject;
+                    if (isPortraitMidAdBanner(view)) {
+                        view.setVisibility(View.GONE);
+                        ViewGroup.LayoutParams lp = view.getLayoutParams();
+                        if (lp != null && lp.height != 0) {
+                            lp.height = 0;
+                            view.setLayoutParams(lp);
+                        }
+                        try {
+                            Method setMeasured = View.class.getDeclaredMethod("setMeasuredDimension", int.class, int.class);
+                            setMeasured.setAccessible(true);
+                            setMeasured.invoke(view, 0, 0);
+                        } catch (Throwable ignored) {}
+                        param.setResult(null);
+                    }
+                }
+            });
+
+            Log.i(TAG, "Hooked LinearLayoutCompat for portrait mid ad banner (jj2)");
+        } catch (Throwable t) {
+            Log.w(TAG, "Failed to hookPortraitMidAdBanner", t);
+        }
+    }
+
+    private static boolean isPortraitMidAdBanner(View view) {
+        if (view == null || view.getId() == View.NO_ID) return false;
+        try {
+            Resources res = view.getResources();
+            if (res == null) return false;
+            String entryName = res.getResourceEntryName(view.getId());
+            if (!"jj2".equals(entryName)) return false;
+
+            if (view instanceof ViewGroup) {
+                ViewGroup vg = (ViewGroup) view;
+                String pkg = view.getContext().getPackageName();
+                int closeId = res.getIdentifier("edf", "id", pkg);
+                int btnId = res.getIdentifier("byg", "id", pkg);
+                return closeId != 0 && btnId != 0
+                        && vg.findViewById(closeId) != null
+                        && vg.findViewById(btnId) != null;
+            }
+        } catch (Throwable ignored) {}
+        return false;
     }
 
     /**
@@ -991,14 +1065,6 @@ public class AdBlockHook {
         } catch (Throwable ignored) {}
     }
 
-    /**
-     * 彻底铲除发现页（推荐流）、首页双列流、动态页等信息流广告卡片
-     * 1. 禁用 AdFactory.e 阻断官方广告 View 创建
-     * 2. 彻底隐藏 AdShadowRoomCardView, NewHomeAdShadowRoomCardView, AdDynamicCardView 等官方卡片
-     * 3. 动态页广告关注推荐卡片直接置为 GONE 并折叠
-     * 4. 深度递归扫描检测广告标记（类名、角标 ImageView 0x7f0a0154、文本含“广告”标签等），自动无缝折叠
-     * 5. 精确覆盖通用 RecyclerView.Adapter 及各类具体业务 Adapter
-     */
     /**
      * 彻底铲除首页（推荐流）、动态页等信息流广告卡片
      * 从【数据源层】+【Adapter 转换层】+【视图渲染层】三位一体根治：
