@@ -301,8 +301,9 @@ public class AdBlockHook {
                     if (param.args.length > 0 && param.args[0] != null) {
                         String keyName = param.args[0].toString();
                         if (keyName.contains("ACCOMPANY") || keyName.equals("VOICE_DANMU")
-                                || keyName.contains("HAPPY_GANG") || keyName.equals("RAMBO_PENDENT")) {
-                            param.setResult(false); // 强制关闭语音厅、陪玩与右侧大挂件业务
+                                || keyName.contains("HAPPY_GANG")) {
+                            Log.d(TAG, "LiveRoomBizSwitch blocked key=" + keyName);
+                            param.setResult(false); // 强制关闭语音厅、陪玩业务（放行 RAMBO_PENDENT 以免误伤房间助手）
                         } else if (keyName.equals("RAMBO_BOTTOM_FUNCTION") || keyName.equals("INPUT_FRAME_INTERACTIVE_ENTRANCES")) {
                             param.setResult(true);  // 强保底栏正常功能区不被隐藏
                         }
@@ -795,6 +796,7 @@ public class AdBlockHook {
                                 ((View) entriesGroup).setVisibility(View.GONE);
                             }
                         } catch (Throwable ignored) {}
+                        Log.d(TAG, "Blocked ActiveEntryPresenter.h0(" + param.args[0] + ")");
                         param.setResult(null);
                     }
                 });
@@ -827,7 +829,13 @@ public class AdBlockHook {
                 for (Method m : rnSmallCls.getDeclaredMethods()) {
                     String name = m.getName();
                     if ((name.equals("zE") || name.equals("DE")) && m.getReturnType() == void.class) {
-                        XposedBridge.hookMethod(m, XC_MethodReplacement.DO_NOTHING);
+                        XposedBridge.hookMethod(m, new XC_MethodHook() {
+                            @Override
+                            protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                                Log.d(TAG, "Blocked RnSmallPendantNeuron." + name);
+                                param.setResult(null);
+                            }
+                        });
                     }
                 }
             }
