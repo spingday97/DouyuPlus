@@ -1,3 +1,4 @@
+```java
 package io.github.ysl_ovo.douyuplus.hooks;
 
 import android.app.Activity;
@@ -789,28 +790,7 @@ public class AdBlockHook {
             }
         } catch (Throwable ignored) {}
 
-        // 0.5 拦截 ActiveEntryPresenter.h0(int)（仅阻断向 B 区 EntriesGroup 添加带 X 关闭按钮的小挂件，绝不触碰 b0/c0/d0 配置拉取，100% 保护底栏三键）
-        try {
-            Class<?> activePresenterCls = XposedHelpers.findClassIfExists(
-                    "com.douyu.sdk.pendantframework.presenter.ActiveEntryPresenter",
-                    lpparam.classLoader
-            );
-            if (activePresenterCls != null) {
-                XposedHelpers.findAndHookMethod(activePresenterCls, "h0", int.class, new XC_MethodHook() {
-                    @Override
-                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                        try {
-                            Object entriesGroup = XposedHelpers.getObjectField(param.thisObject, "c");
-                            if (entriesGroup instanceof View) {
-                                ((View) entriesGroup).setVisibility(View.GONE);
-                            }
-                        } catch (Throwable ignored) {}
-                        Log.d(TAG, "Blocked ActiveEntryPresenter.h0(" + param.args[0] + ")");
-                        param.setResult(null);
-                    }
-                });
-            }
-        } catch (Throwable ignored) {}
+        // 0.5 放行 ActiveEntryPresenter.h0(int)，避免误伤「房间助手」（B区广告挂件已由 EntriesGroup hookViewToGone 隐藏）
 
         // 1. 拦截 PartitionEntriesNeuron (负责下发 _room_activity_a_pendant_load 活动挂件与 PartitionEntriesPendant)
         try {
@@ -997,8 +977,9 @@ public class AdBlockHook {
                     XposedHelpers.findAndHookMethod(neuronCls, "OE", XC_MethodReplacement.returnConstant(0));
                 } catch (Throwable ignored) {}
 
+                // 放行 XE / VE，避免影响「房间助手」等房间交互组件（大挂件视图已由 BigPendantView hookViewToGone 隐藏）
                 Set<String> blockNeuronMethods = new HashSet<>(Arrays.asList(
-                        "UE", "VE", "JE", "XE", "TE", "SE", "hF", "gF", "fF", "mF", "nF", "lF", "dF"
+                        "UE", "JE", "TE", "SE", "hF", "gF", "fF", "mF", "nF", "lF", "dF"
                 ));
                 for (Method m : neuronCls.getDeclaredMethods()) {
                     if (blockNeuronMethods.contains(m.getName()) && m.getReturnType() == void.class) {
@@ -1475,3 +1456,4 @@ public class AdBlockHook {
         return false;
     }
 }
+```
