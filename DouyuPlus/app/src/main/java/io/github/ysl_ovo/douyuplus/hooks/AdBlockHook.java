@@ -1,4 +1,3 @@
-```java
 package io.github.ysl_ovo.douyuplus.hooks;
 
 import android.app.Activity;
@@ -1456,4 +1455,3 @@ public class AdBlockHook {
         return false;
     }
 }
-```
