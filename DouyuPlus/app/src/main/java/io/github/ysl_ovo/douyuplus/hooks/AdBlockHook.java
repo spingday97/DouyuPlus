@@ -92,7 +92,14 @@ public class AdBlockHook {
             Class<?> madProviderCls = XposedHelpers.findClass("com.douyu.module.ad.MADProvider", lpparam.classLoader);
             for (Method m : madProviderCls.getDeclaredMethods()) {
                 if (m.getName().equals("zj") || m.getName().equals("z7")) {
-                    XposedBridge.hookMethod(m, XC_MethodReplacement.returnConstant(null));
+                    final String mName = m.getName();
+                    XposedBridge.hookMethod(m, new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam param) {
+                            Log.d(TAG, "Blocked MADProvider." + mName);
+                            param.setResult(null);
+                        }
+                    });
                 }
             }
         } catch (Throwable ignored) {}
@@ -757,6 +764,7 @@ public class AdBlockHook {
                                         }
                                     }
                                 } catch (Throwable ignored) {}
+                                Log.d(TAG, "Blocked BigPendantNeuron." + bmName);
                                 param.setResult(null);
                             }
                         });
@@ -814,7 +822,14 @@ public class AdBlockHook {
                 for (Method m : partCls.getDeclaredMethods()) {
                     String name = m.getName();
                     if ((name.equals("SE") || name.equals("VE") || name.equals("FE")) && m.getReturnType() == void.class) {
-                        XposedBridge.hookMethod(m, XC_MethodReplacement.DO_NOTHING);
+                        final String pn = name;
+                        XposedBridge.hookMethod(m, new XC_MethodHook() {
+                            @Override
+                            protected void beforeHookedMethod(MethodHookParam param) {
+                                Log.d(TAG, "Blocked PartitionEntriesNeuron." + pn);
+                                param.setResult(null);
+                            }
+                        });
                     }
                 }
             }
@@ -973,10 +988,10 @@ public class AdBlockHook {
             if (neuronCls != null) {
                 // KE() 检查 BizSwitchKey.RAMBO_PENDENT，Hq() 检查横屏小挂件是否显示
                 try {
-                    XposedHelpers.findAndHookMethod(neuronCls, "KE", XC_MethodReplacement.returnConstant(false));
+                    XposedHelpers.findAndHookMethod(neuronCls, "KE", new XC_MethodHook() { @Override protected void beforeHookedMethod(MethodHookParam param) { Log.d(TAG, "Blocked BigPendantNeuron.KE"); param.setResult(false); } });
                 } catch (Throwable ignored) {}
                 try {
-                    XposedHelpers.findAndHookMethod(neuronCls, "Hq", XC_MethodReplacement.returnConstant(false));
+                    XposedHelpers.findAndHookMethod(neuronCls, "Hq", new XC_MethodHook() { @Override protected void beforeHookedMethod(MethodHookParam param) { Log.d(TAG, "Blocked BigPendantNeuron.Hq"); param.setResult(false); } });
                 } catch (Throwable ignored) {}
                 try {
                     XposedHelpers.findAndHookMethod(neuronCls, "OE", XC_MethodReplacement.returnConstant(0));
@@ -987,6 +1002,7 @@ public class AdBlockHook {
                 ));
                 for (Method m : neuronCls.getDeclaredMethods()) {
                     if (blockNeuronMethods.contains(m.getName()) && m.getReturnType() == void.class) {
+                        final String bmName = m.getName();
                         XposedBridge.hookMethod(m, new XC_MethodHook() {
                             @Override
                             protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
@@ -1054,7 +1070,14 @@ public class AdBlockHook {
         for (String funcClsName : adFunctions) {
             try {
                 Class<?> cls = XposedHelpers.findClass(funcClsName, lpparam.classLoader);
-                XposedHelpers.findAndHookMethod(cls, "isEnable", XC_MethodReplacement.returnConstant(false));
+                final String fn = funcClsName;
+                XposedHelpers.findAndHookMethod(cls, "isEnable", new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) {
+                        Log.d(TAG, "Blocked MiscAdFunction: " + fn);
+                        param.setResult(false);
+                    }
+                });
             } catch (Throwable ignored) {}
         }
     }
@@ -1076,6 +1099,7 @@ public class AdBlockHook {
                 @Override
                 protected void afterHookedMethod(MethodHookParam param) throws Throwable {
                     if (param.thisObject instanceof View) {
+                        Log.d(TAG, "Collapsed ViewToGone: " + className);
                         ((View) param.thisObject).setVisibility(View.GONE);
                     }
                 }
