@@ -764,7 +764,7 @@ public class AdBlockHook {
                                         }
                                     }
                                 } catch (Throwable ignored) {}
-                                Log.d(TAG, "Blocked BigPendantNeuron." + bmName);
+                                Log.d(TAG, "Blocked AdFloatBallNeuron.iF");
                                 param.setResult(null);
                             }
                         });
@@ -1006,6 +1006,7 @@ public class AdBlockHook {
                         XposedBridge.hookMethod(m, new XC_MethodHook() {
                             @Override
                             protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                                Log.d(TAG, "Blocked BigPendantNeuron." + bmName);
                                 // 若传入了 root view (UE/VE)，把其中的大挂件和小挂件容器全部隐藏
                                 if (param.args != null && param.args.length == 1 && param.args[0] instanceof View) {
                                     View root = (View) param.args[0];
