@@ -702,8 +702,9 @@ public class AdBlockHook {
         hookViewToGone(lpparam, "com.douyu.sdk.pendantframework.view.ContainerViewHolder");
         hookViewToGone(lpparam, "com.douyu.sdk.pendantframework.view.AlienGroupView");
         hookViewToGone(lpparam, "tv.douyu.business.partitionentries.PartitionEntriesPendant");
-        hookViewToGone(lpparam, "com.douyu.module.rn.smallpendant.RnSmallPendantContainer");
-        hookViewToGone(lpparam, "com.douyu.module.rn.smallpendant.RamboSmallPendantContainer");
+        // 放行 RN 小挂件容器，避免误伤「房间助手」
+        // hookViewToGone(lpparam, "com.douyu.module.rn.smallpendant.RnSmallPendantContainer");
+        // hookViewToGone(lpparam, "com.douyu.module.rn.smallpendant.RamboSmallPendantContainer");
         hookViewToGone(lpparam, "com.douyu.module.player.p.live2pendant.small.SmallPendantView");
         hookViewToGone(lpparam, "com.douyu.module.peiwan.widget.PeiwanPendantView");
         hookViewToGone(lpparam, "tv.douyu.business.anchorentry.AnchorPendantContainer");
@@ -819,27 +820,7 @@ public class AdBlockHook {
             }
         } catch (Throwable ignored) {}
 
-        // 2. 拦截 RnSmallPendantNeuron (右侧 RN 小挂件容器神经元)
-        try {
-            Class<?> rnSmallCls = XposedHelpers.findClassIfExists(
-                    "com.douyu.module.rn.smallpendant.RnSmallPendantNeuron",
-                    lpparam.classLoader
-            );
-            if (rnSmallCls != null) {
-                for (Method m : rnSmallCls.getDeclaredMethods()) {
-                    String name = m.getName();
-                    if ((name.equals("zE") || name.equals("DE")) && m.getReturnType() == void.class) {
-                        XposedBridge.hookMethod(m, new XC_MethodHook() {
-                            @Override
-                            protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                                Log.d(TAG, "Blocked RnSmallPendantNeuron." + name);
-                                param.setResult(null);
-                            }
-                        });
-                    }
-                }
-            }
-        } catch (Throwable ignored) {}
+        // 2. 放行 RnSmallPendantNeuron，避免「房间助手」无法拉起
 
         Log.i(TAG, "Permanently disabled ActiveEntry / Partition / RnSmall pendant views");
     }
