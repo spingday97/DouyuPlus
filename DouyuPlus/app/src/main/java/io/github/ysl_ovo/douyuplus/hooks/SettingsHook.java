@@ -508,6 +508,8 @@ public class SettingsHook {
                 true
         );
 
+        addSwitchRow(activity, root, "合成大西瓜挂机脚本", "打开合成大西瓜活动页时自动注入挂机面板（默认折叠）", DouyuPlusConfig.KEY_WATERMELON_SCRIPT, true);
+
         // 12. 自定义启动落地页面 (四选一)
         addDefaultStartPageRow(activity, root);
 
