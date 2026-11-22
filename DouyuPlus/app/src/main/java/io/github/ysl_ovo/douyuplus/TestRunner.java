@@ -260,7 +260,7 @@ public class TestRunner {
                 Process proc = null;
                 try {
                     int pid = android.os.Process.myPid();
-                    proc = Runtime.getRuntime().exec(new String[]{"logcat", "-v", "time", "--pid=" + pid});
+                    proc = Runtime.getRuntime().exec(new String[]{"logcat", "-v", "time"});
                     BufferedReader reader = new BufferedReader(new InputStreamReader(proc.getInputStream()));
                     String line;
                     while (DouyuPlusConfig.isDebugModeEnabled() && (line = reader.readLine()) != null) {
@@ -317,7 +317,7 @@ public class TestRunner {
                 Process proc = null;
                 try {
                     int pid = android.os.Process.myPid();
-                    proc = Runtime.getRuntime().exec(new String[]{"logcat", "-d", "-v", "time", "-t", "2500", "--pid=" + pid});
+                    proc = Runtime.getRuntime().exec(new String[]{"logcat", "-d", "-v", "time", "-t", "2500"});
                     BufferedReader reader = new BufferedReader(new InputStreamReader(proc.getInputStream()));
                     String line;
                     while ((line = reader.readLine()) != null) {
