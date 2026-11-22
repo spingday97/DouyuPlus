@@ -1,13 +1,14 @@
 package io.github.ysl_ovo.douyuplus.hooks;
 
+import android.content.Context;
 import android.os.Handler;
 import android.os.Looper;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.Toast;
 
 import java.util.Collections;
 import java.util.HashSet;
-import java.util.Map;
 import java.util.Set;
 
 import de.robv.android.xposed.XC_MethodHook;
@@ -19,93 +20,59 @@ import io.github.ysl_ovo.douyuplus.DouyuPlusConfig;
 public class WatermelonHook {
     private static final String TAG = "DouyuPlus-Watermelon";
     private static final Set<Class<?>> hookedClients = Collections.synchronizedSet(new HashSet<>());
+    private static final Set<Integer> toastedViews = Collections.synchronizedSet(new HashSet<>());
     private static final Handler mainHandler = new Handler(Looper.getMainLooper());
 
     public static void hook(XC_LoadPackage.LoadPackageParam lpparam) {
-        hookSystemWebView();
-        hookX5WebView(lpparam.classLoader);
+        hookWebViewClass(WebView.class, WebViewClient.class);
+        hookByName(lpparam.classLoader, "com.tencent.smtt.sdk.WebView", "com.tencent.smtt.sdk.WebViewClient");
+        hookByName(lpparam.classLoader, "com.uc.webview.export.WebView", "com.uc.webview.export.WebViewClient");
     }
 
-    private static void hookSystemWebView() {
+    private static void hookByName(ClassLoader cl, String webViewName, String clientName) {
         try {
-            hookClientOnPageFinished(WebViewClient.class);
-            XposedHelpers.findAndHookMethod(
-                WebView.class,
-                "setWebViewClient",
-                WebViewClient.class,
-                new XC_MethodHook() {
-                    @Override
-                    protected void afterHookedMethod(MethodHookParam param) {
-                        Object client = param.args[0];
-                        if (client != null) {
-                            hookClientOnPageFinished(client.getClass());
-                        }
-                    }
-                }
-            );
-            XposedHelpers.findAndHookMethod(
-                WebView.class,
-                "loadUrl",
-                String.class,
-                new XC_MethodHook() {
-                    @Override
-                    protected void afterHookedMethod(MethodHookParam param) {
-                        scheduleInject(param.thisObject, param.args[0] != null ? param.args[0].toString() : "");
-                    }
-                }
-            );
-            XposedHelpers.findAndHookMethod(
-                WebView.class,
-                "loadUrl",
-                String.class,
-                Map.class,
-                new XC_MethodHook() {
-                    @Override
-                    protected void afterHookedMethod(MethodHookParam param) {
-                        scheduleInject(param.thisObject, param.args[0] != null ? param.args[0].toString() : "");
-                    }
-                }
-            );
+            Class<?> wvClass = XposedHelpers.findClassIfExists(webViewName, cl);
+            Class<?> clientClass = XposedHelpers.findClassIfExists(clientName, cl);
+            if (wvClass != null) {
+                hookWebViewClass(wvClass, clientClass);
+            }
         } catch (Throwable t) {
-            XposedBridge.log(TAG + " hookSystemWebView failed: " + t.getMessage());
+            XposedBridge.log(TAG + " hookByName " + webViewName + " failed: " + t.getMessage());
         }
     }
 
-    private static void hookX5WebView(ClassLoader cl) {
+    private static void hookWebViewClass(Class<?> wvClass, Class<?> baseClientClass) {
         try {
-            Class<?> x5WebViewClass = XposedHelpers.findClassIfExists("com.tencent.smtt.sdk.WebView", cl);
-            Class<?> x5ClientClass = XposedHelpers.findClassIfExists("com.tencent.smtt.sdk.WebViewClient", cl);
-            if (x5ClientClass != null) {
-                hookClientOnPageFinished(x5ClientClass);
+            if (baseClientClass != null) {
+                hookClientOnPageFinished(baseClientClass);
             }
-            if (x5WebViewClass != null && x5ClientClass != null) {
-                XposedHelpers.findAndHookMethod(
-                    x5WebViewClass,
-                    "setWebViewClient",
-                    x5ClientClass,
-                    new XC_MethodHook() {
-                        @Override
-                        protected void afterHookedMethod(MethodHookParam param) {
-                            Object client = param.args[0];
-                            if (client != null) {
-                                hookClientOnPageFinished(client.getClass());
-                            }
-                        }
+            XposedBridge.hookAllConstructors(wvClass, new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) {
+                    scheduleInject(param.thisObject, "ctor://init");
+                }
+            });
+            XposedBridge.hookAllMethods(wvClass, "setWebViewClient", new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) {
+                    if (param.args != null && param.args.length > 0 && param.args[0] != null) {
+                        hookClientOnPageFinished(param.args[0].getClass());
                     }
-                );
-            }
-            if (x5WebViewClass != null) {
-                XposedBridge.hookAllMethods(x5WebViewClass, "loadUrl", new XC_MethodHook() {
+                }
+            });
+            String[] loadMethods = new String[]{"loadUrl", "loadData", "loadDataWithBaseURL", "postUrl"};
+            for (String m : loadMethods) {
+                XposedBridge.hookAllMethods(wvClass, m, new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) {
                         String url = (param.args != null && param.args.length > 0 && param.args[0] != null)
-                            ? param.args[0].toString() : "";
+                            ? param.args[0].toString() : "load://call";
                         scheduleInject(param.thisObject, url);
                     }
                 });
             }
         } catch (Throwable t) {
-            XposedBridge.log(TAG + " hookX5WebView failed: " + t.getMessage());
+            XposedBridge.log(TAG + " hookWebViewClass " + wvClass.getName() + " failed: " + t.getMessage());
         }
     }
 
@@ -135,21 +102,31 @@ public class WatermelonHook {
         if (!DouyuPlusConfig.isWatermelonEnabled() || webView == null) {
             return;
         }
-        if (url == null || url.isEmpty() || url.startsWith("about:") || url.startsWith("javascript:")) {
+        if (url != null && (url.startsWith("about:") || url.startsWith("javascript:"))) {
             return;
         }
-        injectScript(webView);
-        mainHandler.postDelayed(() -> injectScript(webView), 1500);
-        mainHandler.postDelayed(() -> injectScript(webView), 3500);
+        injectScript(webView, url);
+        mainHandler.postDelayed(() -> injectScript(webView, url), 1500);
+        mainHandler.postDelayed(() -> injectScript(webView, url), 3500);
+        mainHandler.postDelayed(() -> injectScript(webView, url), 6000);
     }
 
-    private static void injectScript(final Object webView) {
+    private static void injectScript(final Object webView, final String url) {
         final String js = WatermelonScript.getScript();
         if (js == null || js.isEmpty()) {
             return;
         }
         mainHandler.post(() -> {
             try {
+                if (DouyuPlusConfig.isDebugModeEnabled()) {
+                    int id = System.identityHashCode(webView);
+                    if (toastedViews.add(id)) {
+                        Context ctx = (Context) XposedHelpers.callMethod(webView, "getContext");
+                        if (ctx != null) {
+                            Toast.makeText(ctx, "DouyuPlus注入: " + webView.getClass().getSimpleName(), Toast.LENGTH_SHORT).show();
+                        }
+                    }
+                }
                 if (webView instanceof WebView) {
                     ((WebView) webView).evaluateJavascript(js, null);
                 } else {
