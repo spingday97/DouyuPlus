@@ -1,8 +1,13 @@
 package io.github.ysl_ovo.douyuplus.hooks;
 
+import android.app.Dialog;
 import android.content.Context;
 import android.os.Handler;
 import android.os.Looper;
+import android.util.Log;
+import android.view.SurfaceView;
+import android.view.View;
+import android.view.ViewGroup;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Toast;
@@ -18,26 +23,71 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
 import io.github.ysl_ovo.douyuplus.DouyuPlusConfig;
 
 public class WatermelonHook {
-    private static final String TAG = "DouyuPlus-Watermelon";
+    private static final String TAG = "DouyuPlus";
     private static final Set<Class<?>> hookedClients = Collections.synchronizedSet(new HashSet<>());
     private static final Set<Integer> toastedViews = Collections.synchronizedSet(new HashSet<>());
     private static final Handler mainHandler = new Handler(Looper.getMainLooper());
 
     public static void hook(XC_LoadPackage.LoadPackageParam lpparam) {
+        Log.i(TAG, "[Watermelon] init in process: " + lpparam.processName);
         hookWebViewClass(WebView.class, WebViewClient.class);
         hookByName(lpparam.classLoader, "com.tencent.smtt.sdk.WebView", "com.tencent.smtt.sdk.WebViewClient");
         hookByName(lpparam.classLoader, "com.uc.webview.export.WebView", "com.uc.webview.export.WebViewClient");
+        hookDebugInspectors();
+    }
+
+    private static void hookDebugInspectors() {
+        try {
+            XposedBridge.hookAllConstructors(SurfaceView.class, new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) {
+                    if (DouyuPlusConfig.isDebugModeEnabled() && param.thisObject != null) {
+                        Log.i(TAG, "[Watermelon-Probe] SurfaceView: " + param.thisObject.getClass().getName());
+                    }
+                }
+            });
+            XposedBridge.hookAllMethods(Dialog.class, "show", new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) {
+                    if (DouyuPlusConfig.isDebugModeEnabled() && param.thisObject instanceof Dialog) {
+                        Dialog d = (Dialog) param.thisObject;
+                        Log.i(TAG, "[Watermelon-Probe] Dialog.show: " + d.getClass().getName());
+                        if (d.getWindow() != null) {
+                            dumpViews(d.getWindow().getDecorView(), 0);
+                        }
+                    }
+                }
+            });
+        } catch (Throwable t) {
+            Log.w(TAG, "[Watermelon] hookDebugInspectors failed: " + t.getMessage());
+        }
+    }
+
+    private static void dumpViews(View v, int depth) {
+        if (v == null || depth > 8) return;
+        String name = v.getClass().getName();
+        String lower = name.toLowerCase();
+        if (lower.contains("web") || lower.contains("cocos") || lower.contains("game") || lower.contains("surface") || lower.contains("mini") || lower.contains("xwalk")) {
+            Log.i(TAG, "[Watermelon-Probe] View@" + depth + ": " + name);
+        }
+        if (v instanceof ViewGroup) {
+            ViewGroup vg = (ViewGroup) v;
+            for (int i = 0; i < vg.getChildCount(); i++) {
+                dumpViews(vg.getChildAt(i), depth + 1);
+            }
+        }
     }
 
     private static void hookByName(ClassLoader cl, String webViewName, String clientName) {
         try {
             Class<?> wvClass = XposedHelpers.findClassIfExists(webViewName, cl);
             Class<?> clientClass = XposedHelpers.findClassIfExists(clientName, cl);
+            Log.i(TAG, "[Watermelon] class " + webViewName + " -> " + (wvClass != null));
             if (wvClass != null) {
                 hookWebViewClass(wvClass, clientClass);
             }
         } catch (Throwable t) {
-            XposedBridge.log(TAG + " hookByName " + webViewName + " failed: " + t.getMessage());
+            Log.w(TAG, "[Watermelon] hookByName " + webViewName + " failed: " + t.getMessage());
         }
     }
 
@@ -49,6 +99,7 @@ public class WatermelonHook {
             XposedBridge.hookAllConstructors(wvClass, new XC_MethodHook() {
                 @Override
                 protected void afterHookedMethod(MethodHookParam param) {
+                    Log.i(TAG, "[Watermelon] ctor: " + param.thisObject.getClass().getName());
                     scheduleInject(param.thisObject, "ctor://init");
                 }
             });
@@ -67,12 +118,13 @@ public class WatermelonHook {
                     protected void afterHookedMethod(MethodHookParam param) {
                         String url = (param.args != null && param.args.length > 0 && param.args[0] != null)
                             ? param.args[0].toString() : "load://call";
+                        Log.i(TAG, "[Watermelon] " + m + ": " + url);
                         scheduleInject(param.thisObject, url);
                     }
                 });
             }
         } catch (Throwable t) {
-            XposedBridge.log(TAG + " hookWebViewClass " + wvClass.getName() + " failed: " + t.getMessage());
+            Log.w(TAG, "[Watermelon] hookWebViewClass " + wvClass.getName() + " failed: " + t.getMessage());
         }
     }
 
@@ -90,11 +142,12 @@ public class WatermelonHook {
                     }
                     final Object webView = param.args[0];
                     final String url = param.args[1] != null ? param.args[1].toString() : "";
+                    Log.i(TAG, "[Watermelon] onPageFinished: " + url);
                     scheduleInject(webView, url);
                 }
             });
         } catch (Throwable t) {
-            XposedBridge.log(TAG + " hookClientOnPageFinished failed: " + t.getMessage());
+            Log.w(TAG, "[Watermelon] hookClientOnPageFinished failed: " + t.getMessage());
         }
     }
 
@@ -114,6 +167,7 @@ public class WatermelonHook {
     private static void injectScript(final Object webView, final String url) {
         final String js = WatermelonScript.getScript();
         if (js == null || js.isEmpty()) {
+            Log.w(TAG, "[Watermelon] empty script!");
             return;
         }
         mainHandler.post(() -> {
@@ -133,7 +187,7 @@ public class WatermelonHook {
                     XposedHelpers.callMethod(webView, "evaluateJavascript", js, null);
                 }
             } catch (Throwable t) {
-                XposedBridge.log(TAG + " injectScript failed: " + t.getMessage());
+                Log.w(TAG, "[Watermelon] injectScript failed: " + t.getMessage());
             }
         });
     }
