@@ -15,6 +15,7 @@ import io.github.ysl_ovo.douyuplus.hooks.HomeTabHook;
 import io.github.ysl_ovo.douyuplus.hooks.PadModeHook;
 import io.github.ysl_ovo.douyuplus.hooks.PerformanceHook;
 import io.github.ysl_ovo.douyuplus.hooks.SettingsHook;
+import io.github.ysl_ovo.douyuplus.hooks.WatermelonHook;
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedHelpers;
@@ -59,6 +60,7 @@ public class HookEntry implements IXposedHookLoadPackage {
         if (DouyuPlusConfig.isPerformanceEnabled()) {
             PerformanceHook.hook(lpparam);
         }
+        WatermelonHook.hook(lpparam);
 
         // 非主进程仅挂载后台服务拦截，跳过主界面与播放器 UI Hook
         if (lpparam.processName != null && !TARGET_PACKAGE.equals(lpparam.processName)) {
