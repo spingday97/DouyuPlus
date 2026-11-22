@@ -18,7 +18,7 @@ public class DouyuPlusConfig {
     public static final String KEY_PERFORMANCE = "enable_performance";
     public static final String KEY_AI_STRENGTHEN = "enable_ai_strengthen";
     public static final String KEY_DEBUG_MODE = "enable_debug_mode";
-    public static final String KEY_WATERMELON_SCRIPT = "watermelon_script";;
+    public static final String KEY_WATERMELON_SCRIPT = "watermelon_script";
     public static final String KEY_AI_STRENGTHEN_SGSR_LEVEL = "ai_strengthen_sgsr_level";
     public static final String KEY_AI_STRENGTHEN_CAS_LEVEL = "ai_strengthen_cas_level";
     public static final int DEFAULT_SGSR_LEVEL = 60;
@@ -124,7 +124,7 @@ public class DouyuPlusConfig {
     }
 
     public static boolean isWatermelonEnabled() {
-        return getBoolean(KEY_WATERMELON_SCRIPT, true);
+        return isEnabled(KEY_WATERMELON_SCRIPT, true);
     }
 
     public static int getSgsrLevel(Context context) {
