@@ -6,11 +6,13 @@ import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
 import android.view.SurfaceView;
+import android.view.TextureView;
 import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Toast;
+import android.widget.PopupWindow;
 
 import java.util.Collections;
 import java.util.HashSet;
@@ -58,6 +60,9 @@ public class WatermelonHook {
                     }
                 }
             });
+            XposedBridge.hookAllConstructors(TextureView.class, new XC_MethodHook() {
+               @Override protected void afterHookedMethod(MethodHookParam param) { if (DouyuPlusConfig.isDebugModeEnabled() && param.thisObject != null) { Log.i(TAG, "[Watermelon-Probe] TextureView: " + param.thisObject.getClass().getName()); } } });
+            XC_MethodHook popupHook = new XC_MethodHook() { @Override protected void afterHookedMethod(MethodHookParam param) { if (DouyuPlusConfig.isDebugModeEnabled() && param.thisObject instanceof PopupWindow) { PopupWindow pw = (PopupWindow) param.thisObject; Log.i(TAG, "[Watermelon-Probe] PopupWindow: " + pw.getClass().getName()); if (pw.getContentView() != null) { dumpViews(pw.getContentView(), 0); } } } }; XposedBridge.hookAllMethods(PopupWindow.class, "showAtLocation", popupHook); XposedBridge.hookAllMethods(PopupWindow.class, "showAsDropDown", popupHook);
         } catch (Throwable t) {
             Log.w(TAG, "[Watermelon] hookDebugInspectors failed: " + t.getMessage());
         }
@@ -67,7 +72,7 @@ public class WatermelonHook {
         if (v == null || depth > 8) return;
         String name = v.getClass().getName();
         String lower = name.toLowerCase();
-        if (lower.contains("web") || lower.contains("cocos") || lower.contains("game") || lower.contains("surface") || lower.contains("mini") || lower.contains("xwalk")) {
+        if (lower.contains("web") || lower.contains("cocos") || lower.contains("game") || lower.contains("surface") || lower.contains("texture") || lower.contains("tbs") || lower.contains("x5") || lower.contains("chromium") || lower.contains("lynx") || lower.contains("rn") || lower.contains("mini") || lower.contains("xwalk")) {
             Log.i(TAG, "[Watermelon-Probe] View@" + depth + ": " + name);
         }
         if (v instanceof ViewGroup) {
